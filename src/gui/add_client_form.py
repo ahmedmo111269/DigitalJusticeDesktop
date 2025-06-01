@@ -4,565 +4,574 @@ from PyQt5.QtWidgets import (
     QComboBox, QTextEdit, QDateEdit, QScrollArea, QFrame, QMessageBox,
     QCheckBox, QGroupBox, QSpacerItem, QSizePolicy, QGridLayout
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QDate, QSize # تأكد من وجود QSize
-from PyQt5.QtGui import QIcon, QFont # تأكد من وجود QFont
+from PyQt5.QtCore import Qt, pyqtSignal, QDate, QSize
+from PyQt5.QtGui import QIcon, QFont
 
+# استيراد الألوان من الستايل
 from gui.style import PRIMARY_COLOR, BACKGROUND_COLOR, ACCENT_COLOR, TEXT_COLOR, BORDER_COLOR, DANGER_COLOR, SECONDARY_COLOR, SUCCESS_COLOR, WARNING_COLOR, CARD_BACKGROUND_COLOR
 
-from database.db import SessionLocal
+# استيراد وظائف وقاعدة البيانات والنماذج
+from database.db import SessionLocal, get_db # استيراد get_db
 from database.models.client import Client, ClientType
 from database.models.client_contact_number import ClientContactNumber, ContactType
 from datetime import datetime
 
-from sqlalchemy.orm import relationship, joinedload # <--- هذا السطر هو الأهم! يجب أن يكون موجوداً ويحتوي على relationship و joinedload
+from sqlalchemy.orm import joinedload # مهم لتحميل العلاقات عند التعديل
 
 class AddClientForm(QWidget):
+    # إشارة تصدر عند حفظ موكل جديد بنجاح
     client_saved = pyqtSignal()
+    # إشارة تصدر عند طلب الإلغاء (للعودة إلى العرض السابق)
     cancel_requested = pyqtSignal()
+    # إشارة لتغيير عنوان القسم في النافذة الرئيسية
+    section_title_changed = pyqtSignal(str)
+
 
     def __init__(self, client_id_to_edit=None, parent=None):
         super().__init__(parent)
-        self.db_session = SessionLocal()
+        self.db_session = None # تهيئة الجلسة لاحقاً عند الحاجة
         self.client_id_to_edit = client_id_to_edit
         self.client_to_edit = None
-        self.contact_number_widgets = []
-        
-        self.setup_ui()
 
+        self.contact_number_widgets = [] # لتخزين عناصر واجهة المستخدم لأرقام التواصل
+
+        self.setup_ui()
+        self.apply_stylesheet()
         if self.client_id_to_edit:
-            self.load_client_data_for_edit()
-            self.setWindowTitle("تعديل بيانات موكل")
-        else:
-            self.setWindowTitle("إضافة موكل جديد")
-            self.add_phone_number_field(is_primary_default=True)
+            self.load_client_for_edit()
+
 
     def setup_ui(self):
-        self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(30, 30, 30, 30)
-        self.main_layout.setSpacing(20)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(15)
 
         # عنوان النموذج
-        self.form_title = QLabel("إضافة موكل جديد")
-        self.form_title.setStyleSheet(f"font-size: 30px; font-weight: bold; color: {PRIMARY_COLOR};")
-        self.form_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.main_layout.addWidget(self.form_title)
+        self.title_label = QLabel("إضافة عميل جديد")
+        self.title_label.setFont(QFont("Arial", 18, QFont.Bold))
+        self.title_label.setAlignment(Qt.AlignCenter)
+        self.title_label.setStyleSheet(f"color: {PRIMARY_COLOR};")
+        main_layout.addWidget(self.title_label)
 
-        # منطقة المحتوى القابلة للتمرير (إذا كان النموذج طويلاً)
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.scroll_content = QWidget()
-        self.scroll_content_layout = QVBoxLayout(self.scroll_content)
-        self.scroll_content_layout.setContentsMargins(0, 0, 0, 0)
-        self.scroll_content_layout.setSpacing(15)
-        self.scroll_area.setWidget(self.scroll_content)
-        self.main_layout.addWidget(self.scroll_area)
+        # Scroll Area for the form content
+        scroll_area = QScrollArea(self)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff) # Disable horizontal scroll bar
+        main_layout.addWidget(scroll_area)
 
-        # مجموعة معلومات الموكل الأساسية
-        self._create_basic_info_group()
-        self.scroll_content_layout.addWidget(self.basic_info_group)
+        form_widget = QWidget()
+        self.form_layout = QVBoxLayout(form_widget)
+        self.form_layout.setContentsMargins(0, 0, 0, 0) # No extra margins for the form content
+        self.form_layout.setSpacing(10)
+        scroll_area.setWidget(form_widget)
 
-        # مجموعة معلومات الاتصال
-        self._create_contact_info_group()
-        self.scroll_content_layout.addWidget(self.contact_info_group)
+        # General Info Group Box
+        general_info_group = QGroupBox("المعلومات الأساسية")
+        general_info_layout = QGridLayout()
+        general_info_group.setLayout(general_info_layout)
+        self.form_layout.addWidget(general_info_group)
+
+        # Full Name
+        general_info_layout.addWidget(QLabel("الاسم الكامل:"), 0, 0)
+        self.full_name_input = QLineEdit()
+        self.full_name_input.setPlaceholderText("أدخل الاسم الكامل للعميل")
+        general_info_layout.addWidget(self.full_name_input, 0, 1)
+
+        # Client Type
+        general_info_layout.addWidget(QLabel("نوع العميل:"), 1, 0)
+        self.client_type_combo = QComboBox()
+        for client_type in ClientType:
+            self.client_type_combo.addItem(client_type.value, client_type)
+        self.client_type_combo.currentIndexChanged.connect(self.toggle_client_type_fields)
+        general_info_layout.addWidget(self.client_type_combo, 1, 1)
+
+        # Fields for Individual Clients
+        self.national_id_label = QLabel("الرقم القومي:")
+        self.national_id_input = QLineEdit()
+        self.national_id_input.setPlaceholderText("أدخل الرقم القومي")
+        general_info_layout.addWidget(self.national_id_label, 2, 0)
+        general_info_layout.addWidget(self.national_id_input, 2, 1)
+
+        self.birth_date_label = QLabel("تاريخ الميلاد:")
+        self.birth_date_input = QDateEdit(calendarPopup=True)
+        self.birth_date_input.setDate(QDate.currentDate())
+        self.birth_date_input.setDisplayFormat("yyyy-MM-dd")
+        general_info_layout.addWidget(self.birth_date_label, 3, 0)
+        general_info_layout.addWidget(self.birth_date_input, 3, 1)
+
+        # Fields for Company/Government Entity
+        self.company_name_label = QLabel("اسم الشركة/الجهة:")
+        self.company_name_input = QLineEdit()
+        self.company_name_input.setPlaceholderText("أدخل اسم الشركة أو الجهة")
+        general_info_layout.addWidget(self.company_name_label, 4, 0)
+        general_info_layout.addWidget(self.company_name_input, 4, 1)
+        self.company_name_label.hide()
+        self.company_name_input.hide()
+
+        self.company_registration_number_label = QLabel("رقم التسجيل التجاري:")
+        self.company_registration_number_input = QLineEdit()
+        self.company_registration_number_input.setPlaceholderText("أدخل رقم التسجيل التجاري")
+        general_info_layout.addWidget(self.company_registration_number_label, 5, 0)
+        general_info_layout.addWidget(self.company_registration_number_input, 5, 1)
+        self.company_registration_number_label.hide()
+        self.company_registration_number_input.hide()
+
+        self.company_logo_path_label = QLabel("مسار شعار الشركة:")
+        self.company_logo_path_input = QLineEdit()
+        self.company_logo_path_input.setPlaceholderText("أدخل مسار شعار الشركة (اختياري)")
+        general_info_layout.addWidget(self.company_logo_path_label, 6, 0)
+        general_info_layout.addWidget(self.company_logo_path_input, 6, 1)
+        self.company_logo_path_label.hide()
+        self.company_logo_path_input.hide()
+
+        self.legal_representative_name_label = QLabel("اسم الممثل القانوني:")
+        self.legal_representative_name_input = QLineEdit()
+        self.legal_representative_name_input.setPlaceholderText("أدخل اسم الممثل القانوني")
+        general_info_layout.addWidget(self.legal_representative_name_label, 7, 0)
+        general_info_layout.addWidget(self.legal_representative_name_input, 7, 1)
+        self.legal_representative_name_label.hide()
+        self.legal_representative_name_input.hide()
+
+        self.legal_representative_title_label = QLabel("صفة الممثل:")
+        self.legal_representative_title_input = QLineEdit()
+        self.legal_representative_title_input.setPlaceholderText("أدخل صفة الممثل القانوني")
+        general_info_layout.addWidget(self.legal_representative_title_label, 8, 0)
+        general_info_layout.addWidget(self.legal_representative_title_input, 8, 1)
+        self.legal_representative_title_label.hide()
+        self.legal_representative_title_input.hide()
+
+        # Contact Info Group Box
+        contact_info_group = QGroupBox("معلومات الاتصال")
+        contact_info_layout = QGridLayout()
+        contact_info_group.setLayout(contact_info_layout)
+        self.form_layout.addWidget(contact_info_group)
+
+        contact_info_layout.addWidget(QLabel("العنوان:"), 0, 0)
+        self.address_input = QTextEdit()
+        self.address_input.setPlaceholderText("أدخل عنوان العميل")
+        self.address_input.setFixedSize(QSize(300, 70))
+        contact_info_layout.addWidget(self.address_input, 0, 1)
+
+        contact_info_layout.addWidget(QLabel("البريد الإلكتروني:"), 1, 0)
+        self.email_input = QLineEdit()
+        self.email_input.setPlaceholderText("أدخل البريد الإلكتروني")
+        contact_info_layout.addWidget(self.email_input, 1, 1)
         
-        # ملاحظات إضافية
-        self._create_notes_group()
-        self.scroll_content_layout.addWidget(self.notes_group)
+        # Phone Numbers Dynamic Section
+        self.phone_numbers_group = QGroupBox("أرقام التواصل")
+        self.phone_numbers_layout = QVBoxLayout()
+        self.phone_numbers_group.setLayout(self.phone_numbers_layout)
+        self.form_layout.addWidget(self.phone_numbers_group)
+        
+        self.add_phone_button = QPushButton("إضافة رقم تواصل جديد")
+        self.add_phone_button.clicked.connect(self.add_phone_number_field)
+        self.phone_numbers_layout.addWidget(self.add_phone_button)
+        self.add_phone_number_field() # Add one phone number field by default
 
-        # أزرار الحفظ والإلغاء
-        self.buttons_layout = QHBoxLayout()
-        self.buttons_layout.addStretch(1) # لدفع الأزرار لليمين
+        # Other Info Group Box
+        other_info_group = QGroupBox("معلومات أخرى")
+        other_info_layout = QGridLayout()
+        other_info_group.setLayout(other_info_layout)
+        self.form_layout.addWidget(other_info_group)
 
-        self.save_button = QPushButton("حفظ الموكل")
-        self.save_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {ACCENT_COLOR};
-                color: white;
-                border-radius: 8px;
-                padding: 12px 25px;
-                font-weight: bold;
-                font-size: 16px;
-            }}
-            QPushButton:hover {{
-                background-color: #218838;
-            }}
-        """)
+        other_info_layout.addWidget(QLabel("جهة العمل:"), 0, 0)
+        self.work_employer_input = QLineEdit()
+        self.work_employer_input.setPlaceholderText("أدخل جهة العمل (اختياري)")
+        other_info_layout.addWidget(self.work_employer_input, 0, 1)
+
+        other_info_layout.addWidget(QLabel("مصدر التواصل:"), 1, 0)
+        self.source_of_contact_input = QLineEdit()
+        self.source_of_contact_input.setPlaceholderText("كيف عرف المكتب بالعميل؟ (اختياري)")
+        other_info_layout.addWidget(self.source_of_contact_input, 1, 1)
+
+        other_info_layout.addWidget(QLabel("ملاحظات:"), 2, 0)
+        self.notes_input = QTextEdit()
+        self.notes_input.setPlaceholderText("ملاحظات إضافية عن العميل (اختياري)")
+        self.notes_input.setFixedSize(QSize(300, 70))
+        other_info_layout.addWidget(self.notes_input, 2, 1)
+
+        # Action Buttons
+        button_layout = QHBoxLayout()
+        self.save_button = QPushButton("حفظ")
+        self.save_button.setIcon(QIcon('assets/icons/save_icon.png')) # تأكد من وجود الأيقونة
         self.save_button.clicked.connect(self.save_client)
-        self.buttons_layout.addWidget(self.save_button)
+        button_layout.addWidget(self.save_button)
 
         self.cancel_button = QPushButton("إلغاء")
-        self.cancel_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {DANGER_COLOR};
-                color: white;
-                border-radius: 8px;
-                padding: 12px 25px;
-                font-weight: bold;
-                font-size: 16px;
-            }}
-            QPushButton:hover {{
-                background-color: #c82333;
-            }}
-        """)
+        self.cancel_button.setIcon(QIcon('assets/icons/cancel_icon.png')) # تأكد من وجود الأيقونة
         self.cancel_button.clicked.connect(self.cancel_requested.emit)
-        self.buttons_layout.addWidget(self.cancel_button)
+        button_layout.addWidget(self.cancel_button)
 
-        self.main_layout.addLayout(self.buttons_layout)
+        main_layout.addLayout(button_layout)
         
+        # Initial toggle based on default client type
+        self.toggle_client_type_fields(self.client_type_combo.currentIndex())
+
+
+    def apply_stylesheet(self):
         self.setStyleSheet(f"""
             QWidget {{
                 background-color: {BACKGROUND_COLOR};
                 color: {TEXT_COLOR};
-                font-family: 'Arial';
-            }}
-            QLabel {{
-                font-size: 14px;
-                font-weight: bold;
-            }}
-            QLineEdit, QTextEdit, QComboBox, QDateEdit {{
-                padding: 10px;
-                border: 1px solid {BORDER_COLOR};
-                border-radius: 5px;
-                background-color: {CARD_BACKGROUND_COLOR};
-                font-size: 14px;
-            }}
-            QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QDateEdit:focus {{
-                border: 1px solid {PRIMARY_COLOR};
-            }}
-            QComboBox::drop-down {{
-                border: 0px;
-            }}
-            QComboBox::down-arrow {{
-                image: url(assets/icons/down_arrow.png); /* تأكد من المسار الصحيح للأيقونة */
-                width: 16px;
-                height: 16px;
+                font-family: Arial;
+                font-size: 10pt;
             }}
             QGroupBox {{
-                font-size: 18px;
-                font-weight: bold;
-                color: {PRIMARY_COLOR};
+                background-color: {CARD_BACKGROUND_COLOR};
                 border: 1px solid {BORDER_COLOR};
-                border-radius: 10px;
+                border-radius: 8px;
                 margin-top: 10px;
                 padding-top: 20px;
+                font-size: 11pt;
+                font-weight: bold;
+                color: {PRIMARY_COLOR};
             }}
             QGroupBox::title {{
                 subcontrol-origin: margin;
                 subcontrol-position: top center;
                 padding: 0 10px;
+                background-color: {CARD_BACKGROUND_COLOR};
+                border-radius: 5px;
+            }}
+            QLabel {{
+                color: {TEXT_COLOR};
+                font-weight: bold;
+                padding-right: 5px;
+            }}
+            QLineEdit, QTextEdit, QComboBox, QDateEdit {{
+                padding: 8px;
+                border: 1px solid {BORDER_COLOR};
+                border-radius: 5px;
                 background-color: {BACKGROUND_COLOR};
+                color: {TEXT_COLOR};
+            }}
+            QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QDateEdit:focus {{
+                border: 1px solid {ACCENT_COLOR};
+            }}
+            QPushButton {{
+                background-color: {PRIMARY_COLOR};
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 5px;
+                font-weight: bold;
+                font-size: 10pt;
+            }}
+            QPushButton:hover {{
+                background-color: {ACCENT_COLOR};
+            }}
+            QPushButton#cancel_button {{ /* Example if you want a specific style for cancel */
+                background-color: {DANGER_COLOR};
+            }}
+            QPushButton#cancel_button:hover {{
+                background-color: #A32D2D;
             }}
             QScrollArea {{
                 border: none;
             }}
-        """)
-    
-    def _create_basic_info_group(self):
-        self.basic_info_group = QGroupBox("المعلومات الأساسية")
-        basic_layout = QGridLayout(self.basic_info_group)
-        basic_layout.setSpacing(10)
-
-        # الصف الأول: الاسم الكامل، نوع الموكل
-        basic_layout.addWidget(QLabel("الاسم الكامل:"), 0, 0)
-        self.full_name_input = QLineEdit()
-        self.full_name_input.setPlaceholderText("أدخل الاسم الكامل")
-        basic_layout.addWidget(self.full_name_input, 0, 1)
-
-        basic_layout.addWidget(QLabel("نوع الموكل:"), 0, 2)
-        self.client_type_combo = QComboBox()
-        for client_type in ClientType:
-            self.client_type_combo.addItem(client_type.value, client_type) # القيمة المرئية, القيمة الحقيقية (Enum)
-        self.client_type_combo.currentIndexChanged.connect(self.toggle_client_type_fields)
-        basic_layout.addWidget(self.client_type_combo, 0, 3)
-
-        # الصف الثاني: الرقم القومي، تاريخ الميلاد (للفرد) / رقم السجل التجاري (للشركة)
-        basic_layout.addWidget(QLabel("الرقم القومي:"), 1, 0)
-        self.national_id_input = QLineEdit()
-        self.national_id_input.setPlaceholderText("أدخل الرقم القومي")
-        basic_layout.addWidget(self.national_id_input, 1, 1)
-
-        basic_layout.addWidget(QLabel("تاريخ الميلاد:"), 1, 2)
-        self.date_of_birth_input = QDateEdit(calendarPopup=True)
-        self.date_of_birth_input.setDisplayFormat("yyyy-MM-dd")
-        self.date_of_birth_input.setDate(QDate.currentDate()) # تاريخ اليوم افتراضياً
-        basic_layout.addWidget(self.date_of_birth_input, 1, 3)
-
-        # حقول معلومات الشركة (مخفية افتراضياً)
-        self.company_fields_group = QGroupBox("معلومات الشركة/المؤسسة")
-        self.company_fields_group.setStyleSheet("QGroupBox { background-color: #f0f0f0; border: 1px solid #ddd; border-radius: 5px; padding-top: 15px;} QGroupBox::title { color: #555; }")
-        company_layout = QGridLayout(self.company_fields_group)
-        company_layout.setSpacing(10)
-
-        company_layout.addWidget(QLabel("رقم السجل التجاري/الضريبي:"), 0, 0)
-        self.commercial_reg_no_input = QLineEdit()
-        company_layout.addWidget(self.commercial_reg_no_input, 0, 1)
-
-        company_layout.addWidget(QLabel("اسم الممثل القانوني:"), 1, 0)
-        self.legal_rep_name_input = QLineEdit()
-        company_layout.addWidget(self.legal_rep_name_input, 1, 1)
-
-        company_layout.addWidget(QLabel("صفة الممثل:"), 2, 0)
-        self.legal_rep_title_input = QLineEdit()
-        company_layout.addWidget(self.legal_rep_title_input, 2, 1)
-
-        company_layout.setColumnStretch(1, 1) # جعل حقول الإدخال تتمدد
-        basic_layout.addWidget(self.company_fields_group, 2, 0, 1, 4) # تمتد على 4 أعمدة
-
-        # يجب أن تكون مخفية في البداية
-        self.toggle_client_type_fields()
-
-    def _create_contact_info_group(self):
-        self.contact_info_group = QGroupBox("معلومات الاتصال")
-        contact_layout = QVBoxLayout(self.contact_info_group)
-        contact_layout.setSpacing(10)
-
-        # البريد الإلكتروني
-        email_layout = QHBoxLayout()
-        email_layout.addWidget(QLabel("البريد الإلكتروني:"))
-        self.email_input = QLineEdit()
-        self.email_input.setPlaceholderText("example@domain.com")
-        email_layout.addWidget(self.email_input)
-        contact_layout.addLayout(email_layout)
-
-        # العنوان
-        address_layout = QHBoxLayout()
-        address_layout.addWidget(QLabel("العنوان:"))
-        self.address_input = QLineEdit()
-        self.address_input.setPlaceholderText("العنوان التفصيلي للموكل")
-        address_layout.addWidget(self.address_input)
-        contact_layout.addLayout(address_layout)
-
-        # قسم أرقام الهواتف (ديناميكي)
-        self.phone_numbers_layout = QVBoxLayout()
-        contact_layout.addLayout(self.phone_numbers_layout)
-        
-        add_phone_button = QPushButton("إضافة رقم هاتف آخر")
-        add_phone_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {SECONDARY_COLOR};
-                color: white;
-                border-radius: 5px;
-                padding: 8px 15px;
-                font-weight: bold;
+            QComboBox::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: top left;
+                width: 20px;
+                border-left-width: 1px;
+                border-left-color: darkgray;
+                border-left-style: solid;
+                border-top-right-radius: 3px;
+                border-bottom-right-radius: 3px;
             }}
-            QPushButton:hover {{
-                background-color: #5a6268;
+            QComboBox QAbstractItemView {{
+                border: 1px solid {BORDER_COLOR};
+                selection-background-color: {ACCENT_COLOR};
+                background-color: {BACKGROUND_COLOR};
+                color: {TEXT_COLOR};
+            }}
+            QDateEdit::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: top left;
+                width: 20px;
+                border-left-width: 1px;
+                border-left-color: darkgray;
+                border-left-style: solid;
+                border-top-right-radius: 3px;
+                border-bottom-right-radius: 3px;
             }}
         """)
-        add_phone_button.clicked.connect(self.add_phone_number_field)
-        contact_layout.addWidget(add_phone_button, alignment=Qt.AlignmentFlag.AlignRight)
 
-    def _create_notes_group(self):
-        self.notes_group = QGroupBox("ملاحظات إضافية")
-        notes_layout = QVBoxLayout(self.notes_group)
-        notes_layout.setSpacing(10)
+    def toggle_client_type_fields(self, index):
+        selected_type = self.client_type_combo.itemData(index)
         
-        self.notes_text_edit = QTextEdit()
-        self.notes_text_edit.setPlaceholderText("أدخل أي ملاحظات إضافية عن الموكل...")
-        self.notes_text_edit.setMinimumHeight(100)
-        notes_layout.addWidget(self.notes_text_edit)
+        # Hide all corporate fields
+        self.company_name_label.hide()
+        self.company_name_input.hide()
+        self.company_registration_number_label.hide()
+        self.company_registration_number_input.hide()
+        self.company_logo_path_label.hide()
+        self.company_logo_path_input.hide()
+        self.legal_representative_name_label.hide()
+        self.legal_representative_name_input.hide()
+        self.legal_representative_title_label.hide()
+        self.legal_representative_title_input.hide()
 
-    def add_phone_number_field(self, phone_number="", contact_type_enum=ContactType.MOBILE, is_primary=False, is_primary_default=False):
-        phone_row_widget = QWidget()
-        phone_row_layout = QHBoxLayout(phone_row_widget)
-        phone_row_layout.setContentsMargins(0, 0, 0, 0)
-        phone_row_layout.setSpacing(10)
+        # Hide all individual fields
+        self.national_id_label.hide()
+        self.national_id_input.hide()
+        self.birth_date_label.hide()
+        self.birth_date_input.hide()
 
-        # حقل إدخال الرقم
-        phone_input = QLineEdit()
-        phone_input.setPlaceholderText("رقم الهاتف")
-        phone_input.setText(phone_number)
-        phone_row_layout.addWidget(phone_input)
+        if selected_type == ClientType.INDIVIDUAL:
+            self.national_id_label.show()
+            self.national_id_input.show()
+            self.birth_date_label.show()
+            self.birth_date_input.show()
+        elif selected_type in [ClientType.COMPANY, ClientType.GOVERNMENT_ENTITY]:
+            self.company_name_label.show()
+            self.company_name_input.show()
+            self.company_registration_number_label.show()
+            self.company_registration_number_input.show()
+            self.company_logo_path_label.show()
+            self.company_logo_path_input.show()
+            self.legal_representative_name_label.show()
+            self.legal_representative_name_input.show()
+            self.legal_representative_title_label.show()
+            self.legal_representative_title_input.show()
 
-        # نوع الاتصال (Mobile, Landline, etc.)
+    def add_phone_number_field(self, number="", contact_type_enum=ContactType.MOBILE, is_primary=False):
+        phone_layout = QHBoxLayout()
+        
+        phone_input = QLineEdit(number)
+        phone_input.setPlaceholderText("رقم التواصل")
+        phone_input.setStyleSheet(f"QLineEdit {{background-color: {BACKGROUND_COLOR}; color: {TEXT_COLOR};}}")
+
         type_combo = QComboBox()
         for c_type in ContactType:
             type_combo.addItem(c_type.value, c_type)
-        
-        if contact_type_enum:
-            index = type_combo.findData(contact_type_enum)
-            if index != -1:
-                type_combo.setCurrentIndex(index)
-        
-        phone_row_layout.addWidget(type_combo)
+        type_combo.setCurrentIndex(type_combo.findData(contact_type_enum))
+        type_combo.setStyleSheet(f"QComboBox {{background-color: {BACKGROUND_COLOR}; color: {TEXT_COLOR};}}")
 
-        # تحديد كـ رئيسي
-        primary_checkbox = QCheckBox("رقم رئيسي")
-        primary_checkbox.setChecked(is_primary or is_primary_default)
-        primary_checkbox.stateChanged.connect(lambda state, cb=primary_checkbox: self.handle_primary_checkbox_state(state, cb))
-        phone_row_layout.addWidget(primary_checkbox)
+        primary_checkbox = QCheckBox("أساسي")
+        primary_checkbox.setChecked(is_primary)
+        primary_checkbox.setStyleSheet(f"QCheckBox {{color: {TEXT_COLOR};}}")
 
-        # زر الحذف
-        remove_button = QPushButton(QIcon('assets/icons/delete_icon.png'), "") # تأكد من المسار
-        remove_button.setFixedSize(30, 30)
+        remove_button = QPushButton("إزالة")
         remove_button.setStyleSheet(f"""
             QPushButton {{
-                background-color: transparent;
+                background-color: {DANGER_COLOR};
+                color: white;
                 border: none;
-                padding: 0px;
+                padding: 5px 10px;
+                border-radius: 3px;
+                font-weight: bold;
             }}
             QPushButton:hover {{
-                background-color: rgba(220, 53, 69, 0.2);
-                border-radius: 5px;
+                background-color: #A32D2D;
             }}
         """)
-        remove_button.clicked.connect(lambda: self.remove_phone_number_field(phone_row_widget))
-        phone_row_layout.addWidget(remove_button)
+        remove_button.clicked.connect(lambda: self.remove_phone_number_field(phone_layout))
 
-        self.phone_numbers_layout.addWidget(phone_row_widget)
+        phone_layout.addWidget(phone_input)
+        phone_layout.addWidget(type_combo)
+        phone_layout.addWidget(primary_checkbox)
+        phone_layout.addWidget(remove_button)
+        
+        # Insert the new phone field before the "add phone" button
+        # This keeps the "add phone" button at the bottom
+        self.phone_numbers_layout.insertLayout(self.phone_numbers_layout.count() - 1, phone_layout)
+        
         self.contact_number_widgets.append({
-            'widget': phone_row_widget,
-            'phone_input': phone_input,
-            'type_combo': type_combo,
-            'primary_checkbox': primary_checkbox
+            "layout": phone_layout,
+            "phone_input": phone_input,
+            "type_combo": type_combo,
+            "primary_checkbox": primary_checkbox
         })
-        
-        if is_primary_default:
-            self.handle_primary_checkbox_state(Qt.CheckState.Checked, primary_checkbox)
 
-
-    def remove_phone_number_field(self, widget_to_remove):
-        self.phone_numbers_layout.removeWidget(widget_to_remove)
-        for item in self.contact_number_widgets:
-            if item['widget'] == widget_to_remove:
-                self.contact_number_widgets.remove(item)
+    def remove_phone_number_field(self, layout_to_remove):
+        for i in range(len(self.contact_number_widgets)):
+            if self.contact_number_widgets[i]["layout"] == layout_to_remove:
+                # Remove widgets from layout
+                while layout_to_remove.count():
+                    item = layout_to_remove.takeAt(0)
+                    if item.widget():
+                        item.widget().deleteLater()
+                # Remove layout from parent layout
+                self.phone_numbers_layout.removeItem(layout_to_remove)
+                self.contact_number_widgets.pop(i)
                 break
-        widget_to_remove.deleteLater()
-
-        if not any(w['primary_checkbox'].isChecked() for w in self.contact_number_widgets) and self.contact_number_widgets:
-            self.contact_number_widgets[0]['primary_checkbox'].setChecked(True)
-
-    def handle_primary_checkbox_state(self, state, current_checkbox):
-        if state == Qt.CheckState.Checked:
-            for item in self.contact_number_widgets:
-                if item['primary_checkbox'] != current_checkbox:
-                    item['primary_checkbox'].setChecked(False)
-
-    def toggle_client_type_fields(self):
-        selected_type = self.client_type_combo.currentData()
-
-        self.national_id_input.setVisible(selected_type == ClientType.INDIVIDUAL)
-        self.date_of_birth_input.setVisible(selected_type == ClientType.INDIVIDUAL)
         
-        national_id_label = self.basic_info_group.layout().itemAtPosition(1, 0).widget()
-        date_of_birth_label = self.basic_info_group.layout().itemAtPosition(1, 2).widget()
-        
-        if national_id_label: national_id_label.setVisible(selected_type == ClientType.INDIVIDUAL)
-        if date_of_birth_label: date_of_birth_label.setVisible(selected_type == ClientType.INDIVIDUAL)
-        
-        self.company_fields_group.setVisible(selected_type != ClientType.INDIVIDUAL)
+        # إذا لم يعد هناك أي أرقام، أضف حقلاً فارغاً مرة أخرى
+        if not self.contact_number_widgets:
+            self.add_phone_number_field()
 
 
-    def load_client_data_for_edit(self):
-        self.close_db_session()
-        self.db_session = SessionLocal()
+    def load_client_for_edit(self):
+        """يحمل بيانات العميل الحالي لملء النموذج."""
+        self.title_label.setText("تعديل بيانات العميل")
+        self.section_title_changed.emit("تعديل بيانات العميل") # لتغيير عنوان النافذة الرئيسية
 
-        # <--- التصحيح هنا: استخدام joinedload بدلاً من relationship
-        self.client_to_edit = self.db_session.query(Client).options(
-            joinedload(Client.contact_numbers) 
-        ).get(self.client_id_to_edit)
-
-        if not self.client_to_edit:
-            QMessageBox.critical(self, "خطأ", "لم يتم العثور على الموكل المطلوب للتعديل.")
-            self.cancel_requested.emit()
-            print("لا يوجد موكل للتعديل بعد البحث في قاعدة البيانات.")
-            return
-
-        print(f"بدء تحميل بيانات الموكل للتعديل: {self.client_to_edit.full_name}")
-
+        session = next(get_db()) # استخدام الدالة الجديدة للحصول على جلسة
         try:
-            self.form_title.setText(f"تعديل بيانات الموكل: {self.client_to_edit.full_name}")
+            # تحميل العميل مع العلاقات المرتبطة (أرقام التواصل والتوكيلات)
+            self.client_to_edit = session.query(Client).options(
+                joinedload(Client.contact_numbers),
+                joinedload(Client.power_of_attorneys) # إذا كنت ستعرضها هنا
+            ).get(self.client_id_to_edit)
 
-            self.full_name_input.setText(self.client_to_edit.full_name)
-            # Find index by data (enum value)
-            index = self.client_type_combo.findData(self.client_to_edit.client_type)
-            if index != -1:
-                self.client_type_combo.setCurrentIndex(index)
-            
-            self.toggle_client_type_fields()
+            if self.client_to_edit:
+                # تعبئة الحقول بمعلومات العميل
+                self.full_name_input.setText(self.client_to_edit.full_name)
+                
+                # تعبئة نوع العميل
+                client_type_index = self.client_type_combo.findData(self.client_to_edit.client_type)
+                if client_type_index != -1:
+                    self.client_type_combo.setCurrentIndex(client_type_index)
 
-            if self.client_to_edit.client_type == ClientType.INDIVIDUAL:
-                self.national_id_input.setText(self.client_to_edit.national_id or "")
-                if self.client_to_edit.date_of_birth:
-                    if isinstance(self.client_to_edit.date_of_birth, (datetime, datetime.date)):
-                        qdate = QDate(self.client_to_edit.date_of_birth.year, self.client_to_edit.date_of_birth.month, self.client_to_edit.date_of_birth.day)
-                        self.date_of_birth_input.setDate(qdate)
-                    else: 
-                        try:
-                            date_obj = datetime.strptime(str(self.client_to_edit.date_of_birth), "%Y-%m-%d").date()
-                            qdate = QDate(date_obj.year, date_obj.month, date_obj.day)
-                            self.date_of_birth_input.setDate(qdate)
-                        except ValueError:
-                            print(f"تحذير: لا يمكن تحويل تاريخ الميلاد '{self.client_to_edit.date_of_birth}' إلى تاريخ صالح.")
-                            self.date_of_birth_input.clear()
-            else: 
-                self.commercial_reg_no_input.setText(self.client_to_edit.commercial_registration_no or "")
-                self.legal_rep_name_input.setText(self.client_to_edit.legal_representative_name or "")
-                self.legal_rep_title_input.setText(self.client_to_edit.legal_representative_title or "")
-                        
-            self.address_input.setText(self.client_to_edit.address or "")
-            self.email_input.setText(self.client_to_edit.email or "")
-            self.notes_text_edit.setText(self.client_to_edit.notes or "")
+                # معلومات فردية أو شركة
+                if self.client_to_edit.client_type == ClientType.INDIVIDUAL:
+                    self.national_id_input.setText(self.client_to_edit.national_id or "")
+                    if self.client_to_edit.birth_date:
+                        self.birth_date_input.setDate(QDate(self.client_to_edit.birth_date))
+                else: # Company or Government Entity
+                    self.company_name_input.setText(self.client_to_edit.company_name or "")
+                    self.company_registration_number_input.setText(self.client_to_edit.company_registration_number or "")
+                    self.company_logo_path_input.setText(self.client_to_edit.company_logo_path or "")
+                    self.legal_representative_name_input.setText(self.client_to_edit.legal_representative_name or "")
+                    self.legal_representative_title_input.setText(self.client_to_edit.legal_representative_title or "")
+                
+                self.address_input.setText(self.client_to_edit.address or "")
+                self.email_input.setText(self.client_to_edit.email or "")
+                self.work_employer_input.setText(self.client_to_edit.work_employer or "")
+                self.source_of_contact_input.setText(self.client_to_edit.source_of_contact or "")
+                self.notes_input.setText(self.client_to_edit.notes or "")
 
-            for widget_info in list(self.contact_number_widgets): 
-                self.remove_phone_number_field(widget_info['widget'])
-            self.contact_number_widgets = [] 
+                # تعبئة أرقام التواصل
+                # أولاً، أزل أي حقول أرقام تواصل موجودة افتراضيًا
+                for item in reversed(self.contact_number_widgets): # reversed لإزالة العناصر بشكل صحيح
+                    self.remove_phone_number_field(item["layout"])
+                
+                # ثم أضف الأرقام الموجودة في قاعدة البيانات
+                if self.client_to_edit.contact_numbers:
+                    for contact_num in self.client_to_edit.contact_numbers:
+                        self.add_phone_number_field(
+                            number=contact_num.number,
+                            contact_type_enum=contact_num.contact_type,
+                            is_primary=contact_num.is_primary
+                        )
+                else: # إذا لم يكن هناك أرقام تواصل، أضف حقلاً فارغاً واحداً
+                    self.add_phone_number_field()
 
-            if self.client_to_edit.contact_numbers:
-                for contact in self.client_to_edit.contact_numbers:
-                    self.add_phone_number_field(
-                        phone_number=contact.number, 
-                        contact_type_enum=contact.contact_type, 
-                        is_primary=getattr(contact, 'is_primary', False) 
-                    )
             else:
-                self.add_phone_number_field(is_primary_default=True)
-            
-            print("تم تحميل بيانات الموكل بنجاح.")
+                QMessageBox.warning(self, "خطأ", "لم يتم العثور على العميل المراد تعديله.")
+                self.cancel_requested.emit() # العودة إذا لم يتم العثور على العميل
 
         except Exception as e:
-            print(f"-------------------- خطأ في load_client_data_for_edit! --------------------")
-            print(f"نوع الخطأ: {type(e).__name__}")
-            print(f"القيمة: {e}")
+            QMessageBox.critical(self, "خطأ في التحميل", f"حدث خطأ أثناء تحميل بيانات العميل: {e}")
+            print(f"Error loading client for edit: {e}")
             import traceback
             traceback.print_exc()
-            print(f"----------------------------------------------------------")
-            QMessageBox.critical(self, "خطأ في التحميل", f"حدث خطأ أثناء تحميل بيانات الموكل: {e}")
-            self.cancel_requested.emit()
+        finally:
+            pass # الجلسة تغلق تلقائيًا
 
     def save_client(self):
         full_name = self.full_name_input.text().strip()
-        client_type = self.client_type_combo.currentData()
-        email = self.email_input.text().strip()
-        address = self.address_input.text().strip()
-        notes = self.notes_text_edit.toPlainText().strip()
-
         if not full_name:
-            QMessageBox.warning(self, "خطأ في الإدخال", "الرجاء إدخال الاسم الكامل للموكل.")
+            QMessageBox.warning(self, "إدخال مطلوب", "الرجاء إدخال الاسم الكامل للعميل.")
             return
 
-        national_id = None
-        date_of_birth = None
-        commercial_reg_no = None
-        legal_rep_name = None
-        legal_rep_title = None
+        client_type = self.client_type_combo.currentData()
+
+        # جمع بيانات العميل بناءً على نوعه
+        client_data = {
+            "full_name": full_name,
+            "client_type": client_type,
+            "address": self.address_input.toPlainText().strip(),
+            "email": self.email_input.text().strip(),
+            "work_employer": self.work_employer_input.text().strip(),
+            "source_of_contact": self.source_of_contact_input.text().strip(),
+            "notes": self.notes_input.toPlainText().strip(),
+        }
 
         if client_type == ClientType.INDIVIDUAL:
-            national_id = self.national_id_input.text().strip()
-            date_of_birth_qdate = self.date_of_birth_input.date()
-            date_of_birth = date_of_birth_qdate.toPyDate() if date_of_birth_qdate.isValid() else None
-            
-            if national_id: 
-                existing_client = self.db_session.query(Client).filter_by(national_id=national_id).first()
-                if existing_client:
-                    if self.client_to_edit and existing_client.id == self.client_to_edit.id:
-                        pass
-                    else:
-                        QMessageBox.warning(self, "خطأ في الإدخال", "الرقم القومي المدخل مسجل بالفعل لموكل آخر. الرجاء إدخال رقم قومي فريد.")
-                        return
+            client_data["national_id"] = self.national_id_input.text().strip()
+            client_data["birth_date"] = self.birth_date_input.date().toPyDate() if self.birth_date_input.date() else None
+        else: # COMPANY or GOVERNMENT_ENTITY
+            client_data["company_name"] = self.company_name_input.text().strip()
+            client_data["company_registration_number"] = self.company_registration_number_input.text().strip()
+            client_data["company_logo_path"] = self.company_logo_path_input.text().strip()
+            client_data["legal_representative_name"] = self.legal_representative_name_input.text().strip()
+            client_data["legal_representative_title"] = self.legal_representative_title_input.text().strip()
 
-        else: 
-            commercial_reg_no = self.commercial_reg_no_input.text().strip()
-            legal_rep_name = self.legal_rep_name_input.text().strip()
-            legal_rep_title = self.legal_rep_title_input.text().strip()
-
-            if commercial_reg_no:
-                existing_company = self.db_session.query(Client).filter_by(commercial_registration_no=commercial_reg_no).first()
-                if existing_company:
-                    if self.client_to_edit and existing_company.id == self.client_to_edit.id:
-                        pass
-                    else:
-                        QMessageBox.warning(self, "خطأ في الإدخال", "رقم السجل التجاري/الضريبي مسجل بالفعل لموكل آخر. الرجاء إدخال رقم فريد.")
-                        return
-
+        session = next(get_db()) # استخدام الدالة الجديدة للحصول على جلسة
         try:
-            if self.client_to_edit:
-                client_instance = self.client_to_edit
-                if client_instance:
-                    client_instance.full_name = full_name
-                    client_instance.client_type = client_type
-                    client_instance.email = email if email else None
-                    client_instance.address = address if address else None
-                    client_instance.notes = notes if notes else None
+            if self.client_to_edit: # وضع التعديل
+                # تحديث بيانات العميل الموجود
+                for key, value in client_data.items():
+                    setattr(self.client_to_edit, key, value)
+                session.add(self.client_to_edit)
+                session.flush() # لتحديث ID العميل إذا كان جديداً (لا ينطبق هنا، لكن ممارسة جيدة)
+                client_id = self.client_to_edit.id
 
-                    if client_type == ClientType.INDIVIDUAL:
-                        client_instance.national_id = national_id
-                        client_instance.date_of_birth = date_of_birth
-                        client_instance.commercial_registration_no = None
-                        client_instance.legal_representative_name = None
-                        client_instance.legal_representative_title = None
-                    else:
-                        client_instance.commercial_registration_no = commercial_reg_no
-                        client_instance.legal_representative_name = legal_rep_name
-                        client_instance.legal_representative_title = legal_rep_title
-                        client_instance.national_id = None
-                        client_instance.date_of_birth = None
-
-                    self.db_session.add(client_instance)
-                    client_id = client_instance.id
-
-                    self.db_session.query(ClientContactNumber).filter_by(client_id=client_id).delete()
-                    self.db_session.flush()
-
-            else: 
-                new_client = Client(
-                    full_name=full_name,
-                    client_type=client_type,
-                    national_id=national_id,
-                    date_of_birth=date_of_birth,
-                    commercial_registration_no=commercial_reg_no,
-                    legal_representative_name=legal_rep_name,
-                    legal_representative_title=legal_rep_title,
-                    address=address,
-                    email=email,
-                    notes=notes
-                )
-                self.db_session.add(new_client)
-                self.db_session.flush()
+                # حذف أرقام التواصل القديمة أولاً ثم إضافة الجديدة
+                session.query(ClientContactNumber).filter(ClientContactNumber.client_id == client_id).delete(synchronize_session='fetch')
+                session.flush() # للتأكد من حذفها قبل إضافة الجديدة
+            else: # وضع الإضافة
+                new_client = Client(**client_data)
+                session.add(new_client)
+                session.flush() # للحصول على client_id بعد الإضافة
                 client_id = new_client.id
 
-            found_primary = False
+            # حفظ أرقام التواصل
             contact_numbers_to_save = []
+            found_primary = False
+
             for item in self.contact_number_widgets:
                 phone_num = item['phone_input'].text().strip()
                 contact_type_enum = item['type_combo'].currentData()
                 is_primary = item['primary_checkbox'].isChecked()
 
                 if phone_num:
+                    # منطق التعامل مع الرقم الأساسي
                     if is_primary:
                         if found_primary:
+                            # إذا كان هناك رقم أساسي آخر بالفعل، اجعل هذا الرقم غير أساسي
                             is_primary = False
                         else:
-                            found_primary = True
+                            found_primary = True # علم أننا وجدنا رقمًا رئيسيًا
                     
                     contact_numbers_to_save.append(ClientContactNumber(
                         client_id=client_id,
-                        number=phone_num, 
+                        number=phone_num, # تأكد أن اسم العمود هو 'number'
                         contact_type=contact_type_enum,
                         is_primary=is_primary
                     ))
             
+            # إذا لم يتم تحديد أي رقم رئيسي، اجعل أول رقم هو الرئيسي
             if not found_primary and contact_numbers_to_save:
                 contact_numbers_to_save[0].is_primary = True
 
-            self.db_session.add_all(contact_numbers_to_save)
+            session.add_all(contact_numbers_to_save)
             
-            self.db_session.commit()
+            session.commit()
             QMessageBox.information(self, "نجاح", "تم حفظ بيانات الموكل بنجاح.")
-            self.client_saved.emit()
+            self.client_saved.emit() # إطلاق الإشارة لتحديث العرض
         except Exception as e:
-            self.db_session.rollback()
+            session.rollback() # التراجع عن أي تغييرات في حالة الخطأ
             QMessageBox.critical(self, "خطأ", f"حدث خطأ أثناء حفظ الموكل: {e}")
             print(f"Error saving client: {e}")
             import traceback
             traceback.print_exc()
         finally:
-            self.close_db_session()
+            pass # الجلسة تغلق تلقائيًا
 
     def close_db_session(self):
+        """
+        إغلاق جلسة قاعدة البيانات إذا كانت مفتوحة.
+        ** لم تعد ضرورية مع استخدام get_db() **
+        """
         if self.db_session:
             self.db_session.close()
 
     def closeEvent(self, event):
-        self.close_db_session()
+        """
+        يتم استدعاؤها عند إغلاق النافذة.
+        """
+        self.close_db_session() # إغلاق الجلسة قبل الإغلاق
         super().closeEvent(event)

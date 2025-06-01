@@ -3,8 +3,6 @@ from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, Enum as
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 # لا حاجة لاستيراد datetime هنا إذا كنا نستخدم func.now() لـ created_at و updated_at
-# ويمكن استيرادها عند الحاجة لدوال معينة مثل datetime.now() لـ interaction_date في client_interaction.py
-# from datetime import datetime
 import enum
 
 from database.db import Base # تأكد من أن هذا السطر موجود
@@ -28,15 +26,12 @@ class Client(Base):
     client_type = Column(SQLEnum(ClientType), default=ClientType.INDIVIDUAL, nullable=False)
     
     # معلومات للأفراد
-    national_id = Column(String(50), unique=True, nullable=True) # الرقم القومي (يمكن أن يكون فارغاً للشركات)
-    date_of_birth = Column(DateTime, nullable=True)
-    gender = Column(String(10), nullable=True) # ذكر/أنثى
-    nationality = Column(String(50), nullable=True)
-    marital_status = Column(String(20), nullable=True) # أعزب/متزوج/مطلق/أرمل
-    profession = Column(String(100), nullable=True) # المهنة
-    
-    # معلومات للشركات/الجهات
-    commercial_registration_no = Column(String(100), unique=True, nullable=True) # رقم السجل التجاري/الضريبي
+    national_id = Column(String(50), unique=True, nullable=True, index=True) # يمكن أن يكون فريداً إذا كان مطلوباً
+    birth_date = Column(DateTime, nullable=True) # تاريخ الميلاد
+
+    # معلومات للشركات/الجهات الحكومية
+    company_name = Column(String(255), nullable=True)
+    company_registration_number = Column(String(50), unique=True, nullable=True, index=True)
     company_logo_path = Column(String(255), nullable=True) # مسار شعار الشركة
     legal_representative_name = Column(String(255), nullable=True) # اسم الممثل القانوني
     legal_representative_title = Column(String(100), nullable=True) # صفة الممثل
@@ -58,11 +53,9 @@ class Client(Base):
     # العلاقات
     # عند تعريف العلاقات بين النماذج، استخدم اسم النموذج كنص لتجنب الاستيراد الدائري.
     # SQLAlchemy ستقوم بحل هذا الاسم لاحقاً بمجرد تعريف جميع النماذج.
-    power_of_attorneys = relationship("PowerOfAttorney", back_populates="client")
+    power_of_attorneys = relationship("PowerOfAttorney", back_populates="client", cascade="all, delete-orphan")
     contact_numbers = relationship("ClientContactNumber", back_populates="client", cascade="all, delete-orphan")
-    interactions = relationship("ClientInteraction", back_populates="client")
+    interactions = relationship("ClientInteraction", back_populates="client", cascade="all, delete-orphan")
 
     def __repr__(self):
-        return f"<Client(id={self.id}, name='{self.full_name}', type='{self.client_type.value}')>"
-
-# تم نقل تعريف ClientContactNumber و ClientInteraction إلى ملفاتهما الخاصة.
+        return f"<Client(id={self.id}, full_name='{self.full_name}', type='{self.client_type.value}')>"

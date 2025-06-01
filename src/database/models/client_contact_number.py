@@ -15,11 +15,12 @@ class ContactType(enum.Enum):
 
 class ClientContactNumber(Base):
     __tablename__ = "client_contact_numbers"
-    __table_args__ = {'extend_existing': True} 
+    # __table_args__ = {'extend_existing': True} # هذا السطر ليس مطلوباً إلا في حالات خاصة جداً (اختبار مثلاً)
+                                                # ويفضل إزالته لتجنب سلوك غير متوقع مع SQLAlchemy
 
     id = Column(Integer, primary_key=True, index=True)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
-    number = Column(String(50), nullable=False)
+    number = Column(String(50), nullable=False) # تم تغيير الاسم من phone_number إلى number
     contact_type = Column(SQLEnum(ContactType), default=ContactType.MOBILE, nullable=False)
     notes = Column(String(255), nullable=True)
     is_primary = Column(Boolean, default=False, nullable=False) # **تم إضافة هذا السطر**
