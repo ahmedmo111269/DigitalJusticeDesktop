@@ -1,0 +1,6 @@
+# digital_justice_desktop/requirements.txt
+PyQt5==5.15.10
+SQLAlchemy==2.0.30
+psycopg2-binary==2.9.9 # للاتصال بـ PostgreSQL
+python-dotenv==1.0.1
+passlib[bcrypt]==1.7.4
